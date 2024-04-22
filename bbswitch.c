@@ -31,6 +31,7 @@
 #include <linux/pci.h>
 #include <linux/acpi.h>
 #include <linux/module.h>
+#include <linux/delay.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
 #include <linux/suspend.h>
@@ -240,7 +241,10 @@ static int bbswitch_acpi_off(void) {
     if(use_pmh7_instead) {
         pr_info("Using raw PMH7 bit manipulation to disable GPU!\n");
         pmh7_dgpu_raw_poke(7, 0);
+        mdelay(1);
         pmh7_dgpu_raw_poke(3, 0);
+        mdelay(50);
+        pr_info("Done manipulating\n");
     } else if (dsm_type == DSM_TYPE_NVIDIA) {
         char args[] = {2, 0, 0, 0};
         u32 result = 0;
@@ -260,7 +264,10 @@ static int bbswitch_acpi_on(void) {
         pr_info("Using raw PMH7 bit manipulation to enable GPU!\n");
         pmh7_dgpu_raw_poke(7, 0);
         pmh7_dgpu_raw_poke(3, 1);
+        mdelay(10);
         pmh7_dgpu_raw_poke(7, 1);
+        mdelay(50);
+        pr_info("Done manipulating\n");
     } else if (dsm_type == DSM_TYPE_NVIDIA) {
         char args[] = {1, 0, 0, 0};
         u32 result = 0;
@@ -277,10 +284,9 @@ static int bbswitch_acpi_on(void) {
 
 // Returns 1 if the card is disabled, 0 if enabled
 static int is_card_disabled(void) {
-    if (use_pmh7_instead) {
-        return !pmh7_dgpu_raw_peek(BBSWITCH_EC_LENOVO_PMH7_DGPU_POWER_BIT);
-    }
-
+    // if (use_pmh7_instead) {
+    //     return !pmh7_dgpu_raw_peek(BBSWITCH_EC_LENOVO_PMH7_DGPU_POWER_BIT);
+    // }
     u32 cfg_word;
     // read first config word which contains Vendor and Device ID. If all bits
     // are enabled, the device is assumed to be off
