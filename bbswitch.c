@@ -487,7 +487,10 @@ static int __init bbswitch_init(void) {
         return -ENODEV;
     }
 
-    if (!skip_optimus_dsm &&
+    if(use_pmh7_instead) {
+        pr_info("using raw PMH7 control registers\n");
+    }
+    else if (!skip_optimus_dsm &&
             has_dsm_func(acpi_optimus_dsm_muid, 0x100, 0x1A)) {
         dsm_type = DSM_TYPE_OPTIMUS;
         pr_info("detected an Optimus _DSM function\n");
