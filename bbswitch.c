@@ -31,12 +31,24 @@
 #include <linux/pci.h>
 #include <linux/acpi.h>
 #include <linux/module.h>
+#include <asm/io.h>
 #include <asm/uaccess.h>
 #include <linux/suspend.h>
 #include <linux/seq_file.h>
 #include <linux/pm_runtime.h>
+#include <linux/proc_fs.h>
 
-#define BBSWITCH_VERSION "0.8"
+
+#define BBSWITCH_EC_LENOVO_PMH7_BASE 0x15e0
+#define BBSWITCH_EC_LENOVO_PMH7_ADDR_L (BBSWITCH_EC_LENOVO_PMH7_BASE + 0x0c)
+#define BBSWITCH_EC_LENOVO_PMH7_ADDR_H (BBSWITCH_EC_LENOVO_PMH7_BASE + 0x0d)
+#define BBSWITCH_EC_LENOVO_PMH7_DATA (BBSWITCH_EC_LENOVO_PMH7_BASE + 0x0e)
+#define BBSWITCH_EC_LENOVO_PMH7_DGPU_L 0x50
+#define BBSWITCH_EC_LENOVO_PMH7_DGPU_H 0x00
+#define BBSWITCH_EC_LENOVO_PMH7_DGPU_WRITE_BIT 7
+#define BBSWITCH_EC_LENOVO_PMH7_DGPU_POWER_BIT 3
+
+#define BBSWITCH_VERSION "0.9"
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Toggle the discrete graphics card");
@@ -58,6 +70,9 @@ module_param(unload_state, int, 0600);
 static bool skip_optimus_dsm = false;
 MODULE_PARM_DESC(skip_optimus_dsm, "Skip probe of Optimus discrete DSM (default = false)");
 module_param(skip_optimus_dsm, bool, 0400);
+static bool use_pmh7_instead = false;
+MODULE_PARM_DESC(use_pmh7_instead, "Use PMH7 interface directly to toggle Optimus [DANGEROUS] (default = false)");
+module_param(use_pmh7_instead, bool, 0400);
 
 extern struct proc_dir_entry *acpi_root_dir;
 
@@ -98,6 +113,30 @@ static char *buffer_to_string(const char *buffer, size_t n, char *target) {
         snprintf(target + i * 5, 5 * (n - i), "0x%02X,", buffer ? buffer[i] & 0xFF : 0);
     }
     return target;
+}
+
+// Returns 1 if that DGPU control bit is set
+static int pmh7_dgpu_raw_peek(unsigned char bit) {
+    outb(BBSWITCH_EC_LENOVO_PMH7_DGPU_L, BBSWITCH_EC_LENOVO_PMH7_ADDR_L);
+    outb(BBSWITCH_EC_LENOVO_PMH7_DGPU_H, BBSWITCH_EC_LENOVO_PMH7_ADDR_H);
+    unsigned char result = inb(BBSWITCH_EC_LENOVO_PMH7_DATA);
+    result &= 1 << bit;
+    return result != 0x00;
+}
+// Sets (set != 0) some DGPU control bit, or clears (set == 0) it
+static void pmh7_dgpu_raw_poke(unsigned char bit, int set) {
+    outb(BBSWITCH_EC_LENOVO_PMH7_DGPU_L, BBSWITCH_EC_LENOVO_PMH7_ADDR_L);
+    outb(BBSWITCH_EC_LENOVO_PMH7_DGPU_H, BBSWITCH_EC_LENOVO_PMH7_ADDR_H);
+    unsigned char result = inb(BBSWITCH_EC_LENOVO_PMH7_DATA);
+    if(set) {
+        result |= 1 << bit;
+    } else {
+        result &= ~(1 << bit);
+    }
+
+    outb(BBSWITCH_EC_LENOVO_PMH7_DGPU_L, BBSWITCH_EC_LENOVO_PMH7_ADDR_L);
+    outb(BBSWITCH_EC_LENOVO_PMH7_DGPU_H, BBSWITCH_EC_LENOVO_PMH7_ADDR_H);
+    outb(result, BBSWITCH_EC_LENOVO_PMH7_DATA);
 }
 
 // Returns 0 if the call succeeded and non-zero otherwise. If the call
@@ -198,7 +237,11 @@ static int bbswitch_optimus_dsm(void) {
 }
 
 static int bbswitch_acpi_off(void) {
-    if (dsm_type == DSM_TYPE_NVIDIA) {
+    if(use_pmh7_instead) {
+        pr_info("Using raw PMH7 bit manipulation to disable GPU!\n");
+        pmh7_dgpu_raw_poke(7, 0);
+        pmh7_dgpu_raw_poke(3, 0);
+    } else if (dsm_type == DSM_TYPE_NVIDIA) {
         char args[] = {2, 0, 0, 0};
         u32 result = 0;
 
@@ -213,7 +256,12 @@ static int bbswitch_acpi_off(void) {
 }
 
 static int bbswitch_acpi_on(void) {
-    if (dsm_type == DSM_TYPE_NVIDIA) {
+    if(use_pmh7_instead) {
+        pr_info("Using raw PMH7 bit manipulation to enable GPU!\n");
+        pmh7_dgpu_raw_poke(7, 0);
+        pmh7_dgpu_raw_poke(3, 1);
+        pmh7_dgpu_raw_poke(7, 1);
+    } else if (dsm_type == DSM_TYPE_NVIDIA) {
         char args[] = {1, 0, 0, 0};
         u32 result = 0;
 
@@ -229,6 +277,10 @@ static int bbswitch_acpi_on(void) {
 
 // Returns 1 if the card is disabled, 0 if enabled
 static int is_card_disabled(void) {
+    if (use_pmh7_instead) {
+        return !pmh7_dgpu_raw_peek(BBSWITCH_EC_LENOVO_PMH7_DGPU_POWER_BIT);
+    }
+
     u32 cfg_word;
     // read first config word which contains Vendor and Device ID. If all bits
     // are enabled, the device is assumed to be off
@@ -252,7 +304,7 @@ static void bbswitch_off(void) {
 
     pr_info("disabling discrete graphics\n");
 
-    if (bbswitch_optimus_dsm()) {
+    if (!use_pmh7_instead && bbswitch_optimus_dsm()) {
         pr_warn("Optimus ACPI call failed, the device is not disabled\n");
         return;
     }
@@ -262,10 +314,9 @@ static void bbswitch_off(void) {
     pci_disable_device(dis_dev);
     do {
         struct acpi_device *ad = NULL;
-        int r;
 
-        r = acpi_bus_get_device(dis_handle, &ad);
-        if (r || !ad) {
+        ad = acpi_fetch_acpi_dev(dis_handle);
+        if (!ad) {
             pr_warn("Cannot get ACPI device for PCI device\n");
             break;
         }
@@ -375,12 +426,12 @@ static int bbswitch_pm_handler(struct notifier_block *nbp,
     return 0;
 }
 
-static struct file_operations bbswitch_fops = {
-    .open   = bbswitch_proc_open,
-    .read   = seq_read,
-    .write  = bbswitch_proc_write,
-    .llseek = seq_lseek,
-    .release= single_release
+static struct proc_ops bbswitch_fops = {
+    .proc_open   = bbswitch_proc_open,
+    .proc_read   = seq_read,
+    .proc_write  = bbswitch_proc_write,
+    .proc_lseek = seq_lseek,
+    .proc_release= single_release
 };
 
 static struct notifier_block nb = {
