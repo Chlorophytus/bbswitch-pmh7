@@ -108,7 +108,9 @@ The Lenovo T410 and Lenovo T410s laptops need the module option
 `skip_optimus_dsm=1`, otherwise it will detect the wrong methods which result in
 the card not being disabled.
 
-Option `use_pmh7_instead=1` disables ACPI toggle and uses the PMH7 registers directly. This is **dangerous** and should only be used as a last resort. I will be testing this on a Lenovo W541.
+Option `use_pmh7_instead=1` disables ACPI toggle and uses the PMH7 registers
+directly. This is **dangerous** and should only be used as a last resort. I
+will be testing this on a Lenovo W541.
 
 ### Disable card on boot
 

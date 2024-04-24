@@ -241,9 +241,9 @@ static int bbswitch_acpi_off(void) {
     if(use_pmh7_instead) {
         pr_info("Using raw PMH7 bit manipulation to disable GPU!\n");
         pmh7_dgpu_raw_poke(7, 0);
-        mdelay(1);
+        usleep_range(1000, 2000);
         pmh7_dgpu_raw_poke(3, 0);
-        mdelay(50);
+        msleep(50);
         pr_info("Done manipulating\n");
     } else if (dsm_type == DSM_TYPE_NVIDIA) {
         char args[] = {2, 0, 0, 0};
@@ -264,9 +264,9 @@ static int bbswitch_acpi_on(void) {
         pr_info("Using raw PMH7 bit manipulation to enable GPU!\n");
         pmh7_dgpu_raw_poke(7, 0);
         pmh7_dgpu_raw_poke(3, 1);
-        mdelay(10);
+        usleep_range(10000, 20000);
         pmh7_dgpu_raw_poke(7, 1);
-        mdelay(50);
+        msleep(50);
         pr_info("Done manipulating\n");
     } else if (dsm_type == DSM_TYPE_NVIDIA) {
         char args[] = {1, 0, 0, 0};
